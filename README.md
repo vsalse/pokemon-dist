@@ -1,4 +1,4 @@
-# Despliegue Dockerizado - Pokémon App
+# Despliegue Dockerizado - Pokemon App
 
 Este entorno dockeriza el backend (Spring Boot), frontend (React) y Redis para desarrollo o producción.
 

@@ -172,3 +172,7 @@ https://console.cloud.google.com/run/detail/us-central1/pokemon-backend/logs?inv
 https://pokemon-frontend-422670589510.us-central1.run.app
 #BACK
 https://pokemon-backend-422670589510.us-central1.run.app
+
+
+#swagger
+http://localhost:8080/swagger-ui.html
