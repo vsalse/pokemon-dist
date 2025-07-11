@@ -1,0 +1,174 @@
+gcloud auth login
+gcloud config set project desafio-pokemon-vsalse
+
+#2. Sube tus imágenes a Google Container Registry
+
+#back
+docker build -t gcr.io/desafio-pokemon-vsalse/pokemon-backend:latest -f pokemon-dist/Dockerfile.backend .
+docker push gcr.io/desafio-pokemon-vsalse/pokemon-backend:latest
+
+
+#front
+docker build -t gcr.io/desafio-pokemon-vsalse/pokemon-frontend:latest -f pokemon-dist/Dockerfile.frontend .
+
+***
+docker build -f pokemon-dist/Dockerfile.frontend \
+  --build-arg REACT_APP_API_URL=https://pokemon-backend-422670589510.us-central1.run.app \
+  -t gcr.io/desafio-pokemon-vsalse/pokemon-frontend:latest .
+
+docker push gcr.io/desafio-pokemon-vsalse/pokemon-frontend:latest
+
+
+
+#3. Crea una VM f1-micro para Redis (gratis)
+
+gcloud compute instances create redis-demo \
+  --zone=us-central1-a \
+  --machine-type=f1-micro \
+  --image-family=debian-11 \
+  --image-project=debian-cloud \
+  --tags=redis-server \
+  --scopes=default
+
+#Abre el puerto 6379 para tu IP:
+gcloud compute firewall-rules create allow-redis \
+  --allow=tcp:6379 \
+  --target-tags=redis-server \
+  --source-ranges=45.224.141.106/32
+
+#Abre el puerto 6379 para GCloud:
+gcloud compute firewall-rules create allow-redis-cloudrun \
+  --allow=tcp:6379 \
+  --target-tags=redis-server \
+  --source-ranges=35.235.240.0/20 \
+  --description="Permitir acceso desde Cloud Run a Redis" \
+  --network=default
+
+
+        #Conéctate por SSH e instala Redis:
+        gcloud compute ssh redis-demo --zone=us-central1-a
+        sudo apt-get update
+        sudo apt-get install redis-server -y
+        sudo sed -i 's/^bind .*/bind 0.0.0.0/' /etc/redis/redis.conf
+        sudo systemctl restart redis-server
+        exit
+
+        #consola de REDIS
+        redis-cli
+        -> keys *
+        -> flushdb  (borra la base actual)
+
+
+#Obtén la IP externa de la VM:
+gcloud compute instances describe redis-demo --zone=us-central1-a --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+#34.133.141.209
+
+#se comprobó que desde gcloud no se puede acceder al redis con ip publica, vamos a probar con VPC Serverless Connector
+
+#Paso a paso para configurar VPC Serverless Connector
+
+
+#1. Crear el VPC Serverless Connector
+gcloud compute networks vpc-access connectors create serverless-connector \
+  --region=us-central1 \
+  --network=default \
+  --range=10.8.0.0/28
+
+#2. Obtener la IP privada de la VM Redis
+gcloud compute instances describe redis-demo \
+  --zone=us-central1-a \
+  --format="get(networkInterfaces[0].networkIP)"
+        ->10.128.0.2
+
+
+
+
+
+#4. Despliega el backend en Cloud Run (se probo apuntar al REDIS con ip publica 34.133.141.209 )
+gcloud run deploy pokemon-backend \
+  --image gcr.io/desafio-pokemon-vsalse/pokemon-backend:latest \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars REDIS_HOST=34.133.141.209,REDIS_PORT=6379
+
+#se probo apuntar al REDIS con VPC Serverless Connector ip:10.128.0.2
+gcloud run deploy pokemon-backend \
+  --image gcr.io/desafio-pokemon-vsalse/pokemon-backend:latest \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --vpc-connector=serverless-connector \
+  --vpc-egress=private-ranges-only \
+  --set-env-vars REDIS_HOST=10.128.0.2,REDIS_PORT=6379
+
+#5. Despliega el frontend en Cloud Run
+gcloud run deploy pokemon-frontend \
+  --image gcr.io/desafio-pokemon-vsalse/pokemon-frontend:latest \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars REACT_APP_API_URL=https://pokemon-backend-422670589510.us-central1.run.app
+
+***
+gcloud run deploy pokemon-frontend \
+  --image gcr.io/desafio-pokemon-vsalse/pokemon-frontend:latest \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated
+
+
+
+
+
+
+
+
+#para levantar el back desde la imagen de gc
+docker run \
+  -e REDIS_HOST=34.133.141.209 \
+  -e REDIS_PORT=6379 \
+  -e PORT=8080 \
+  -p 8080:8080 \
+  gcr.io/desafio-pokemon-vsalse/pokemon-backend:latest
+
+
+
+#para depurar problemas con redis
+gcloud compute instances describe redis-demo --zone=us-central1-a --format="get(tags.items)"
+    -> redis-server
+gcloud compute firewall-rules describe allow-redis-cloudrun
+
+#estando dentro de la MV
+    sudo netstat -plnt | grep 6379
+    -> tcp        0      0 0.0.0.0:6379            0.0.0.0:*               LISTEN      1836/redis-server 0
+
+
+ 
+gcloud compute firewall-rules list --format="table(name, direction, sourceRanges, allowed, targetTags)"
+
+NAME                    DIRECTION  SOURCE_RANGES          ALLOWED                                                                                                             TARGET_TAGS
+allow-redis             INGRESS    ['45.224.141.106/32']  [{'IPProtocol': 'tcp', 'ports': ['6379']}]                                                                          ['redis-server']
+allow-redis-cloudrun    INGRESS    ['35.235.240.0/20']    [{'IPProtocol': 'tcp', 'ports': ['6379']}]                                                                          ['redis-server']
+default-allow-icmp      INGRESS    ['0.0.0.0/0']          [{'IPProtocol': 'icmp'}]
+default-allow-internal  INGRESS    ['10.128.0.0/9']       [{'IPProtocol': 'tcp', 'ports': ['0-65535']}, {'IPProtocol': 'udp', 'ports': ['0-65535']}, {'IPProtocol': 'icmp'}]
+default-allow-rdp       INGRESS    ['0.0.0.0/0']          [{'IPProtocol': 'tcp', 'ports': ['3389']}]
+default-allow-ssh       INGRESS    ['0.0.0.0/0']          [{'IPProtocol': 'tcp', 'ports': ['22']}]
+➜  desafio-pokemon 
+
+
+
+
+
+#GCloud
+#repositorio
+https://console.cloud.google.com/artifacts/docker/desafio-pokemon-vsalse/us/gcr.io?inv=1&invt=Ab2ZIg&project=desafio-pokemon-vsalse
+#logs
+https://console.cloud.google.com/run/detail/us-central1/pokemon-backend/logs?inv=1&invt=Ab2Z_A&project=desafio-pokemon-vsalse
+
+
+
+#FRONT
+https://pokemon-frontend-422670589510.us-central1.run.app
+#BACK
+https://pokemon-backend-422670589510.us-central1.run.app
