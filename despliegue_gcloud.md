@@ -1,42 +1,35 @@
-# Despliegue desafío Pokemon en Google Cloud
+Despliegue desafío Pokemon en Google Cloud
 
-Este documento describe el despliegue de la solución Redis (para cache de la aplicación), Backend (Spring Boot) y Frontend (ReactJS) en Google Cloud, usando Cloud Run y una VM para Redis.
+Despliegue de la solución Redis(para cache de la aplicación), Back(SpringBoot) y Front(ReactJS) en Google Cloud, usando Cloud Run y una VM para Redis.
 
 ---
 
-## 1. Creación del proyecto en Google Cloud
+1. Creación del proyecto en Google Cloud
 
-Lo primero que debes hacer es crear un proyecto en Google Cloud llamado `desafio-pokemon-vsalse`. Desde la consola de Google Cloud, selecciónalo y configúralo en la CLI con:
+Lo primero que hice fue crear un proyecto en Google Cloud llamado `desafio-pokemon-vsalse`. Desde la consola de Google Cloud, lo seleccioné y luego lo configuré en la CLI con:
 
-```sh
 gcloud config set project desafio-pokemon-vsalse
-```
+
 
 ---
 
-## 2. Habilitación de APIs necesarias
+2. Habilitación de APIs necesarias
 
-Para poder usar Cloud Run, Container Registry, Redis y VPC Access, habilita las siguientes APIs:
+Para poder usar Cloud Run, Container Registry, Redis y VPC Access, habilité las siguientes APIs:
 
-```sh
 gcloud services enable run.googleapis.com
-
 gcloud services enable containerregistry.googleapis.com
-
 gcloud services enable redis.googleapis.com
-
 gcloud services enable vpcaccess.googleapis.com
-```
 
 ---
 
-## 3. Despliegue de Redis en una VM
+3. Despliegue de Redis en una VM
 
 Quise tener control total sobre Redis, así que decidí levantarlo en una VM propia (Compute Engine):
 
-### 3.1. Creación de la VM
+3.1. Creación de la VM
 
-```sh
 gcloud compute instances create redis-demo \
   --zone=us-central1-a \
   --machine-type=f1-micro \
@@ -44,70 +37,62 @@ gcloud compute instances create redis-demo \
   --image-project=debian-cloud \
   --tags=redis-server \
   --scopes=default
-```
 
-### 3.2. Configuración de firewall para Cloud Run
+
+3.2. Configuración de firewall para Cloud Run
 
 Abrí el puerto 6379 para mi IP local para poder acceder por ssh y poder instalar REDIS:
 
-```sh
 gcloud compute firewall-rules create allow-redis \
   --allow=tcp:6379 \
   --target-tags=redis-server \
   --source-ranges=45.224.141.106/32
-```
 
-Abrí el puerto 6379 para el rango de IPs de Cloud Run, para que el backend pueda conectarse a REDIS:
+Abrí el puerto 6379 para el rango de IPs de Cloud Run, para que el back pueda conectarse al REDIS:
 
-```sh
 gcloud compute firewall-rules create allow-redis-cloudrun \
   --allow=tcp:6379 \
   --target-tags=redis-server \
   --source-ranges=35.235.240.0/20 \
   --description="Permitir acceso desde Cloud Run a Redis" \
   --network=default
-```
 
-### 3.3. Instalación y configuración de Redis
+
+3.3. Instalación y configuración de Redis
 
 Me conecté por SSH a la VM y ejecuté:
 
-```sh
 sudo apt-get update
 sudo apt-get install redis-server -y
 sudo sed -i 's/^bind .*/bind 0.0.0.0/' /etc/redis/redis.conf
 sudo systemctl restart redis-server
 exit
-```
 
-### 3.4. Obtención de la IP privada de la VM
 
-```sh
+3.4. Obtención de la IP privada de la VM
+
 gcloud compute instances describe redis-demo \
   --zone=us-central1-a \
   --format="get(networkInterfaces[0].networkIP)"
-```
 
-### 3.5. Creación del VPC Serverless Connector
+
+3.5. Creación del VPC Serverless Connector (esto fue necesario porque el back desde el GC no llegaba al REDIS por mas que tuviera configurado para ello)
 
 Para que Cloud Run pudiera acceder a Redis por IP privada, creé el conector:
 
-```sh
 gcloud compute networks vpc-access connectors create serverless-connector \
   --region=us-central1 \
   --network=default \
   --range=10.8.0.0/28
-```
+
 
 ---
 
-## 4. Preparación de los Dockerfile
+4. Preparación de los Dockerfile
 
-### 4.1. Dockerfile del Backend
+4.1. Dockerfile del Backend
 
-`pokemon-dist/Dockerfile.backend`:
-
-```dockerfile
+# Dockerfile para backend
 FROM eclipse-temurin:17-jdk as build
 WORKDIR /app
 COPY pokemon-api .
@@ -118,14 +103,12 @@ FROM eclipse-temurin:17-jre
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
 EXPOSE 8080
-ENTRYPOINT ["java", "-Djava.net.preferIPv4Stack=true", "-jar", "app.jar"]
-```
+ENTRYPOINT ["java", "-Djava.net.preferIPv4Stack=true", "-jar", "app.jar"] 
 
-### 4.2. Dockerfile del Frontend
 
-`pokemon-dist/Dockerfile.frontend`:
+4.2. Dockerfile del Frontend
 
-```dockerfile
+# Dockerfile para frontend
 FROM node:20-alpine as build
 WORKDIR /app
 COPY pokemon-front .
@@ -156,16 +139,15 @@ RUN echo 'server { \
 }' > /etc/nginx/conf.d/default.conf
 
 EXPOSE 8080
-CMD ["nginx", "-g", "daemon off;"]
-```
+CMD ["nginx", "-g", "daemon off;"] 
+
 
 ---
 
-## 5. Despliegues
+5. Despliegues
 
-### Backend
+-Backend
 
-```sh
 docker build -t gcr.io/desafio-pokemon-vsalse/pokemon-backend:latest -f pokemon-dist/Dockerfile.backend .
 
 docker push gcr.io/desafio-pokemon-vsalse/pokemon-backend:latest
@@ -178,11 +160,10 @@ gcloud run deploy pokemon-backend \
   --vpc-connector=serverless-connector \
   --vpc-egress=private-ranges-only \
   --set-env-vars REDIS_HOST=10.128.0.2,REDIS_PORT=6379
-```
 
-### Frontend
 
-```sh
+-Frontend
+
 docker build -f pokemon-dist/Dockerfile.frontend \
   --build-arg REACT_APP_API_URL=https://pokemon-backend-422670589510.us-central1.run.app \
   -t gcr.io/desafio-pokemon-vsalse/pokemon-frontend:latest .
@@ -194,15 +175,18 @@ gcloud run deploy pokemon-frontend \
   --platform managed \
   --region us-central1 \
   --allow-unauthenticated
-```
 
----
 
-## URLs
+URLs
 
-- **Frontend:**  
-  https://pokemon-frontend-422670589510.us-central1.run.app
-- **Backend:**  
-  https://pokemon-backend-422670589510.us-central1.run.app
-- **Swagger:**  
-  https://pokemon-backend-422670589510.us-central1.run.app/swagger-ui.html 
+Front
+https://pokemon-frontend-422670589510.us-central1.run.app
+
+Back
+https://pokemon-backend-422670589510.us-central1.run.app
+
+Swagger
+https://pokemon-backend-422670589510.us-central1.run.app/swagger-ui.html
+
+
+  
